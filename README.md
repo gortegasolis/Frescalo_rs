@@ -1,6 +1,6 @@
 # Frescalo2Rust
 
-A faithful, behaviour-preserving Rust port of Mark Hill's FRESCALO suite (Hill, 2011, *Methods in Ecology and Evolution* 2: 502–512; see `Original_frescalo/` for the original Fortran sources and the paper).
+A faithful, behaviour-preserving Rust port of Mark Hill's FRESCALO suite (Hill, 2011, *Methods in Ecology and Evolution* 2: 502–512).
 
 Three programs are ported, as three binaries:
 
@@ -43,7 +43,7 @@ cargo doc --no-deps --open
 ``` sh
 ./frescalo.sh build     # cargo build --release
 ./frescalo.sh doc       # cargo doc --no-deps --open
-./frescalo.sh verify    # run verify_against_fortran.sh (needs Original_frescalo/)
+./frescalo.sh verify    # run verify_against_fortran.sh (needs a folder named Original_frescalo in the root, containing the original fortran code files)
 ./frescalo.sh release   # tag a version and push it, triggering the release workflow
 ```
 
@@ -82,7 +82,7 @@ builds the original Fortran with gfortran and diffs every output file of the ful
 
 ### Relationship to the Windows reference outputs
 
-`Original_frescalo/` contains output files produced by the original Windows executables. The Rust port reproduces them exactly except for last-digit rounding in a small fraction of lines (`dist.txt` 0/80800, `samples.txt` 0/405, `trends.txt` 3/6521, `frequencies.txt` 583/185803, `sim.txt` 16/40400, `weights.txt` 12/35549). These differences are platform artifacts of the old Windows compiler: it evaluated intermediate expressions in x87 80-bit extended precision and rounded exact ties half-away-from-zero, whereas modern x86-64 (both gfortran and this port) uses strict IEEE single precision and round-half-to-even. A native gfortran build of the original sources produces output identical to this port, not to the Windows reference files.
+The Rust port reproduces results from the original fortran code exactly except for last-digit rounding in a small fraction of lines (`dist.txt` 0/80800, `samples.txt` 0/405, `trends.txt` 3/6521, `frequencies.txt` 583/185803, `sim.txt` 16/40400, `weights.txt` 12/35549). These differences are platform artifacts of the old Windows compiler: it evaluated intermediate expressions in x87 80-bit extended precision and rounded exact ties half-away-from-zero, whereas modern x86-64 (both gfortran and this port) uses strict IEEE single precision and round-half-to-even. A native gfortran build of the original sources produces output identical to this port, not to the Windows reference files.
 
 ## Fidelity notes
 
