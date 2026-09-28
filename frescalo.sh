@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Development/maintenance helper for Frescalo2Rust.
+# Development/maintenance helper for Frescalo_rs.
 # Run `./frescalo.sh help` for the list of subcommands.
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
