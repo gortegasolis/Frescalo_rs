@@ -298,6 +298,14 @@ builds the original Fortran with gfortran and diffs every output file of the ful
 
 `cargo test` needs no Fortran compiler. `tests/golden.rs` runs the pipeline on a small synthetic data set (`tests/fixtures/`, made by `generate.py`) and compares every output with files produced by the gfortran build. It covers prompted runs, option-driven runs, runs mixing the two, the defaults for a blank answer, and geodesic mode.
 
+The comparison is byte for byte on x86-64 Linux (glibc), the platform the golden files were made on. On macOS and Windows it is tolerant, because their maths libraries can round single-precision `ln` and `exp` differently in the last bit. After `fresca`'s search for α, that can change a site's iteration count by one and the 4th decimal of its rescaled frequencies. On those platforms the test requires:
+
+- the same lines, with every site, species and period field identical;
+- decimals within 5 units of the last printed digit, and whole numbers within 1;
+- at most 5% of lines differing at all.
+
+Set `FRESCALO_GOLDEN_TOLERANT=1` to use the tolerant comparison on Linux too. Changes to the method that are smaller than this rounding are only caught on Linux, and CI runs the exact comparison there on every push.
+
 ### Relationship to the Windows reference outputs
 
 The Rust port reproduces results from the original fortran code exactly except for last-digit rounding in a small fraction of lines (`dist.txt` 0/80800, `samples.txt` 0/405, `trends.txt` 3/6521, `frequencies.txt` 583/185803, `sim.txt` 16/40400, `weights.txt` 12/35549). These differences are platform artifacts of the old Windows compiler: it evaluated intermediate expressions in x87 80-bit extended precision and rounded exact ties half-away-from-zero, whereas modern x86-64 (both gfortran and this port) uses strict IEEE single precision and round-half-to-even. A native gfortran build of the original sources produces output identical to this port, not to the Windows reference files.

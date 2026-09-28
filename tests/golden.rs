@@ -60,12 +60,28 @@ fn run(bin: &str, dir: &Path, args: &[&str], stdin: &str) -> std::process::Outpu
     out
 }
 
+/// Whether outputs must match the golden files byte for byte.
+///
+/// The golden files come from gfortran on x86-64 Linux, and the port matches
+/// them exactly with glibc's single-precision `logf`/`expf`. Other platforms'
+/// math libraries (macOS, Windows) may round those functions differently in
+/// the last bit, which shows up as last-digit differences in the `frescalo`
+/// outputs. There the comparison is [`assert_close`] instead. Setting
+/// `FRESCALO_GOLDEN_TOLERANT=1` forces the tolerant comparison anywhere.
+fn exact_platform() -> bool {
+    cfg!(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"))
+        && std::env::var_os("FRESCALO_GOLDEN_TOLERANT").is_none()
+}
+
 fn assert_same(dir: &Path, file: &str, golden: &str) {
     let got = fs::read(dir.join(file)).unwrap_or_else(|_| panic!("{} not written", file));
     let want = fs::read(fixtures().join("golden").join(golden).join(file)).unwrap();
-    if got != want {
-        let g = String::from_utf8_lossy(&got);
-        let w = String::from_utf8_lossy(&want);
+    if got == want {
+        return;
+    }
+    let g = String::from_utf8_lossy(&got);
+    let w = String::from_utf8_lossy(&want);
+    if exact_platform() {
         let line = g
             .lines()
             .zip(w.lines())
@@ -73,6 +89,56 @@ fn assert_same(dir: &Path, file: &str, golden: &str) {
             .map(|i| i + 1)
             .unwrap_or(g.lines().count().min(w.lines().count()) + 1);
         panic!("{} differs from golden/{} (first difference at line {})", file, golden, line);
+    }
+    assert_close(&g, &w, file, golden);
+}
+
+/// Tolerant comparison for platforms whose math library rounds differently:
+/// same number of lines, same non-numeric fields, decimals within 5 units of
+/// the last printed digit, integers within 1 (a fit may converge one
+/// iteration earlier or later), and at most 5% of lines differing at all.
+fn assert_close(got: &str, want: &str, file: &str, golden: &str) {
+    let g: Vec<&str> = got.lines().collect();
+    let w: Vec<&str> = want.lines().collect();
+    assert_eq!(g.len(), w.len(), "{}: line count differs from golden/{}", file, golden);
+    let mut differing = 0usize;
+    for (k, (a, b)) in g.iter().zip(&w).enumerate() {
+        if a == b {
+            continue;
+        }
+        differing += 1;
+        let fail = |why: &str| -> ! {
+            panic!("{} line {} differs from golden/{} ({}):\n  got  {}\n  want {}", file, k + 1, golden, why, a, b)
+        };
+        let (ta, tb): (Vec<&str>, Vec<&str>) = (a.split_whitespace().collect(), b.split_whitespace().collect());
+        if ta.len() != tb.len() {
+            fail("different number of fields");
+        }
+        for (x, y) in ta.iter().zip(&tb) {
+            if x == y {
+                continue;
+            }
+            let (vx, vy) = match (x.parse::<f64>(), y.parse::<f64>()) {
+                (Ok(vx), Ok(vy)) => (vx, vy),
+                _ => fail("non-numeric field differs"),
+            };
+            let decimals = y.split_once('.').map_or(0, |(_, d)| d.len());
+            let tol = if y.contains('.') { 5.0 * 10f64.powi(-(decimals as i32)) } else { 1.0 };
+            if (vx - vy).abs() > tol + 1e-9 {
+                fail(&format!("{} vs {} exceeds tolerance {}", x, y, tol));
+            }
+        }
+    }
+    assert!(
+        differing * 20 <= w.len(),
+        "{}: {} of {} lines differ from golden/{} (more than 5%)",
+        file,
+        differing,
+        w.len(),
+        golden
+    );
+    if differing > 0 {
+        eprintln!("{}: {} of {} lines within tolerance of golden/{}", file, differing, w.len(), golden);
     }
 }
 
