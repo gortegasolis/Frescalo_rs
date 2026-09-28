@@ -2,111 +2,112 @@
 //! SAMPDIST - Sample distances in neighbourhoods
 //! written by Mark Hill, January-June 2011
 //!
-//! Calculates the Euclidean distances between sample locations (treated as
-//! easting/northing) and writes, for each location, the nearest `neigh`
-//! locations (including itself) in increasing distance order.
+//! For each location, writes the nearest `--neighbours` locations (itself
+//! first) in increasing distance order. Distances are planar (easting,
+//! northing; the original) or, with `--distance geodesic`, WGS84 geodesic
+//! distances in km from (longitude, latitude).
 
-use frescalo::*;
-use std::io::{self, BufWriter, Write};
+use frescalo::cli::{fatal, Args, OptSpec, Session, NO_HOLD};
+use frescalo::config::{limits, SampdistParams, DEFAULT_SPATIAL_NEIGHBOURS};
+use frescalo::distance::{check_lon_lat, DistanceEngine, Metric};
+use frescalo::fortran::{cout, name_to_string, DataReader};
+use frescalo::neighbourhood::spatial::{looks_like_degrees, rank_by_distance, read_locations};
+use frescalo::output::write_distance_row;
+use std::io::{BufWriter, Write};
 
-const MM: usize = 400000;
+const PROGRAM: &str = "sampdist";
 
-/// `sampdist` is the first, spatial half of building neighbourhoods for FRESCALO (the second,
-/// floristic half is `neighsim`). Given a list of site locations (easting, northing), it computes
-/// the straight-line distance between every pair of sites and, for each site, writes out its N
-/// geographically nearest neighbours, ranked closest first — the spatial-proximity ranking the
-/// paper describes as the first filter when building a neighbourhood, e.g. taking "the 200
-/// spatially closest hectads" before narrowing down by floristic similarity (Hill 2011, p.196).
-/// The number of neighbours to keep (N) is asked for interactively; the original worked example in
-/// the paper used 200.
-// @tangle:start sampdist__main
+const OPTIONS: &[OptSpec] = &[
+    OptSpec {
+        name: "locations",
+        value: Some("FILE"),
+        help: "Locations file [site x y]",
+    },
+    OptSpec {
+        name: "output",
+        value: Some("FILE"),
+        help: "Output file of neighbourhood distances (must not exist)",
+    },
+    OptSpec {
+        name: "neighbours",
+        value: Some("N"),
+        help: "Nearest sites to keep per site, including itself [default: 200]",
+    },
+    OptSpec {
+        name: "distance",
+        value: Some("METHOD"),
+        help: "planar (x y = easting northing) or geodesic (x y = lon lat, WGS84, km) [default: planar]",
+    },
+    NO_HOLD,
+];
+
 fn main() {
-    let mut stdin = io::stdin().lock();
+    let args = Args::parse(PROGRAM, "SAMPDIST - Sample distances in neighbourhoods", OPTIONS);
+    let mut session = Session::new(PROGRAM, args.has("no-hold"));
+    let metric = match args.get("distance") {
+        None => Metric::Planar,
+        Some(v) => Metric::from_option(v)
+            .unwrap_or_else(|| fatal(PROGRAM, &format!("--distance must be 'planar' or 'geodesic', not '{}'", v))),
+    };
 
-    let mut sa = vec![blank_name(); MM + 2];
-    let mut aeast = vec![0.0f32; MM + 2];
-    let mut anorth = vec![0.0f32; MM + 2];
-    let mut dist = vec![0.0f32; MM + 2];
-    let mut index = vec![0i32; MM + 2];
-
-    let mut m: usize = 0;
-
-    // Set up files for reading and writing
     cout("");
     cout(" SAMPDIST - Sample distances in neighbourhoods");
     cout(" written by Mark Hill, January-June 2011");
     cout("");
-    cout(" Type name of file with locations ....");
-    let (_filein, fin) = filin(&mut stdin);
+    let (_filein, fin) = session.input_file(args.get("locations"), &[" Type name of file with locations ...."]);
     let mut reader = DataReader::new(fin);
-    cout(" Type name of output file with neighbourhood distances ...");
-    let (_fileou, fout) = filout(&mut stdin);
+    let (_fileou, fout) = session.output_file(
+        args.get("output"),
+        &[" Type name of output file with neighbourhood distances ..."],
+    );
     let mut unit9 = BufWriter::new(fout);
-    cout(" Type number of neighbours to include ...");
-    let neigh = read_int_listdirected(&mut stdin);
+    let params = SampdistParams {
+        neighbours: session.neighbours(&args, DEFAULT_SPATIAL_NEIGHBOURS),
+        metric,
+    };
 
-    // Set up index of samples
-    let mut samp = blank_name();
-    let mut east = blank_name();
-    let mut north = blank_name();
-    loop {
-        if !reader.getd(&mut samp, &mut east, &mut north) {
-            break;
-        }
-        addwrd(&mut sa, &mut m, &samp);
-        if m % 100 == 0 {
-            ld_line(&format!("{}  Sample  {}", ld_i(m as i64), name_to_string(&samp)));
-        }
-    }
+    let locs = read_locations(&mut reader, limits::SAMPDIST_SITES);
 
-    reader.rewind();
-
-    loop {
-        if !reader.getd(&mut samp, &mut east, &mut north) {
-            break;
+    match params.metric {
+        Metric::Planar => {
+            if args.get("distance").is_none() && locs.m > 1 && looks_like_degrees(&locs) {
+                eprintln!(
+                    "{}: warning: all coordinates look like longitude/latitude; planar distances on degrees \
+                     distort neighbourhoods (consider --distance geodesic)",
+                    PROGRAM
+                );
+            }
         }
-        let i = binfnd(&sa, m, &samp);
-        aeast[i] = getnum(&east);
-        anorth[i] = getnum(&north);
-        if i % 100 == 0 {
-            ld_line(&format!(
-                "{}   {}{}{}",
-                ld_i(i as i64),
-                name_to_string(&sa[i]),
-                ld_f(aeast[i]),
-                ld_f(anorth[i])
-            ));
+        Metric::GeodesicWgs84 => {
+            for i in 1..=locs.m {
+                let c = &locs.coords[i];
+                if let Err(e) = check_lon_lat(c.x64, c.y64) {
+                    fatal(PROGRAM, &format!("site {}: {}", name_to_string(&locs.names[i]).trim(), e));
+                }
+            }
+            cout(" Distances: geodesic on the WGS84 ellipsoid (Karney 2013), in km");
         }
     }
+    if params.neighbours as usize > locs.m && args.get("neighbours").is_some() {
+        eprintln!(
+            "{}: warning: --neighbours {} exceeds the number of sites ({}); writing {} per site",
+            PROGRAM, params.neighbours, locs.m, locs.m
+        );
+    }
 
-    // Now start calculating distances
-    for i1 in 1..=m {
+    let engine = DistanceEngine::new(params.metric);
+    let mut ranked = Vec::with_capacity(locs.m);
+    let nout = (params.neighbours.max(0) as usize).min(locs.m);
+    for i1 in 1..=locs.m {
         if i1 % 100 == 0 {
-            ld_line(&format!("Calculating distances   {}", ld_i(m as i64)));
+            frescalo::fortran::ld_line(&format!("Calculating distances   {}", frescalo::fortran::ld_i(locs.m as i64)));
         }
-        for i2 in 1..=m {
-            let de = aeast[i1] - aeast[i2];
-            let dn = anorth[i1] - anorth[i2];
-            dist[i2] = (de * de + dn * dn).sqrt();
-            index[i2] = i2 as i32;
-        }
-        sort2(&mut dist, &mut index, m);
-        // (the original would read past the sorted arrays if neigh > m)
-        let nout = (neigh.max(0) as usize).min(m);
-        for is2 in 1..=nout {
-            let iis2 = index[is2] as usize;
-            // 2030 format(2a10,i5,1x,f6.0)
-            let mut r = Rec::new();
-            r.name(&sa[i1])
-                .name(&sa[iis2])
-                .i(is2 as i64, 5)
-                .x(1)
-                .f(dist[is2], 6, 0);
-            r.writeln(&mut unit9);
+        rank_by_distance(i1, &locs, &engine, &mut ranked);
+        for (is2, &(dist, iis2)) in ranked.iter().take(nout).enumerate() {
+            write_distance_row(&mut unit9, &locs.names[i1], &locs.names[iis2 as usize], is2 as i64 + 1, dist as f32);
         }
     }
 
     unit9.flush().unwrap();
-    hold(&mut stdin);
+    session.finish();
 }
-// @tangle:end sampdist__main

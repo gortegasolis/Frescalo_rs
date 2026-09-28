@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Rust port of Mark Hill's FRESCALO, SAMPDIST and NEIGHSIM Fortran programs (2011)"
 
+[dependencies]
+# Geodesic distances on the WGS84 ellipsoid (sampdist --distance geodesic).
+geographiclib-rs = "0.2.7"
+
 [lib]
 name = "frescalo"
 path = "src/lib.rs"
